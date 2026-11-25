@@ -1,6 +1,5 @@
 use crate::{bootstrap, config, jobs::Event};
 use anyhow::{Context, Result};
-use serde::Deserialize;
 use std::{
     fs,
     path::{Path, PathBuf},
@@ -9,25 +8,11 @@ use std::{
     time::Duration,
 };
 
-const API: &str = "https://api.github.com/repos/Supa-Doge/supa-dev/releases/latest";
+const RELEASES: &str = "https://github.com/Supa-Doge/supa-dev/releases";
 #[derive(Clone, Debug)]
 pub struct Update {
     pub version: String,
     pub path: Option<PathBuf>,
-}
-#[derive(Deserialize)]
-struct Asset {
-    name: String,
-    url: String,
-    #[serde(default)]
-    digest: Option<String>,
-}
-#[derive(Deserialize)]
-struct Release {
-    tag_name: String,
-    assets: Vec<Asset>,
-    draft: bool,
-    prerelease: bool,
 }
 fn asset_name() -> &'static str {
     if cfg!(windows) {
@@ -36,36 +21,29 @@ fn asset_name() -> &'static str {
         "supa-dev-linux-x86_64"
     }
 }
-fn get(
-    client: &reqwest::blocking::Client,
-    url: &str,
-    binary: bool,
-) -> Result<reqwest::blocking::Response> {
+fn get(client: &reqwest::blocking::Client, url: &str) -> Result<reqwest::blocking::Response> {
     anyhow::ensure!(
-        url.starts_with("https://api.github.com/"),
-        "Некорректный адрес GitHub API"
+        url.starts_with(&format!("{RELEASES}/download/")),
+        "Некорректный адрес релиза"
     );
-    let request = client.get(url).header(
-        "Accept",
-        if binary {
-            "application/octet-stream"
-        } else {
-            "application/vnd.github+json"
-        },
-    );
-    let response = request.send().context("GitHub недоступен")?;
-    if matches!(response.status().as_u16(), 401 | 403 | 404) {
-        anyhow::bail!(
-            "Сервер обновлений временно недоступен (HTTP {}). Попробуем снова позже.",
-            response.status()
-        );
-    }
+    let response = client
+        .get(url)
+        .send()
+        .context("Сервер обновлений недоступен")?;
     anyhow::ensure!(
         response.status().is_success(),
         "GitHub: HTTP {}",
         response.status()
     );
     Ok(response)
+}
+fn release_version(url: &str) -> Result<(String, semver::Version)> {
+    let tag = url
+        .strip_prefix(&format!("{RELEASES}/tag/"))
+        .context("Некорректный адрес последнего релиза")?;
+    let version = semver::Version::parse(tag.trim_start_matches('v'))?;
+    anyhow::ensure!(version.pre.is_empty(), "Ожидался стабильный релиз");
+    Ok((tag.into(), version))
 }
 fn checksum(text: &str, name: &str) -> Option<String> {
     text.lines().find_map(|line| {
@@ -77,40 +55,37 @@ fn checksum(text: &str, name: &str) -> Option<String> {
     })
 }
 pub fn check(tx: &Sender<Event>, cancel: &AtomicBool) -> Result<()> {
+    check_since(
+        &semver::Version::parse(env!("CARGO_PKG_VERSION"))?,
+        tx,
+        cancel,
+    )
+}
+pub fn download_latest(tx: &Sender<Event>, cancel: &AtomicBool) -> Result<()> {
+    // Diagnostic download only; it never installs or restarts an application.
+    check_since(&semver::Version::new(0, 0, 0), tx, cancel)
+}
+fn check_since(current: &semver::Version, tx: &Sender<Event>, cancel: &AtomicBool) -> Result<()> {
     let client = bootstrap::client()?;
-    let release: Release = get(&client, API, false)?
-        .json()
-        .context("Некорректное описание релиза")?;
-    let version = semver::Version::parse(release.tag_name.trim_start_matches('v'))?;
+    // Public web release links do not consume the REST API's shared-IP quota.
+    let response = client
+        .head(format!("{RELEASES}/latest"))
+        .send()
+        .context("Не удалось проверить обновление")?;
     anyhow::ensure!(
-        !release.draft && !release.prerelease,
-        "Ожидался стабильный релиз"
+        response.status().is_success(),
+        "Проверка обновления: HTTP {}",
+        response.status()
     );
-    if version <= semver::Version::parse(env!("CARGO_PKG_VERSION"))? {
+    let (tag, version) = release_version(response.url().as_str())?;
+    if &version <= current {
         let _ = tx.send(Event::UpdateStatus("Установлена актуальная версия".into()));
         return Ok(());
     }
     let name = asset_name();
-    let asset = release
-        .assets
-        .iter()
-        .find(|a| a.name == name)
-        .context("В релизе нет сборки для этой системы")?;
-    let expected = if let Some(sum) = asset
-        .digest
-        .as_deref()
-        .and_then(|d| d.strip_prefix("sha256:"))
-    {
-        sum.to_string()
-    } else {
-        let sums = release
-            .assets
-            .iter()
-            .find(|a| a.name == "SHA256SUMS")
-            .context("В релизе отсутствует SHA256SUMS")?;
-        checksum(&get(&client, &sums.url, true)?.text()?, name)
-            .context("Нет контрольной суммы приложения")?
-    };
+    let base = format!("{RELEASES}/download/{tag}");
+    let expected = checksum(&get(&client, &format!("{base}/SHA256SUMS"))?.text()?, name)
+        .context("Нет контрольной суммы приложения")?;
     let path = config::home()
         .join("updates")
         .join(version.to_string())
@@ -118,7 +93,7 @@ pub fn check(tx: &Sender<Event>, cancel: &AtomicBool) -> Result<()> {
     // Reuse a verified download after choosing "Later" or restarting the app.
     if !path.is_file() || bootstrap::sha256(&path)? != expected.to_ascii_lowercase() {
         bootstrap::download(
-            get(&client, &asset.url, true)?,
+            get(&client, &format!("{base}/{name}"))?,
             &path,
             "Обновление Supa Dev",
             tx,
@@ -232,5 +207,17 @@ mod tests {
             semver::Version::parse("0.1.0").unwrap()
                 <= semver::Version::parse(env!("CARGO_PKG_VERSION")).unwrap()
         );
+    }
+    #[test]
+    fn release_redirect_must_point_to_this_repository_and_stable_version() {
+        assert_eq!(
+            release_version(&format!("{RELEASES}/tag/v0.1.2"))
+                .unwrap()
+                .1,
+            semver::Version::new(0, 1, 2)
+        );
+        assert!(release_version("https://example.invalid/releases/tag/v9.0.0").is_err());
+        assert!(release_version(&format!("{RELEASES}/tag/v0.1.2-beta.1")).is_err());
+        assert!(release_version(&format!("{RELEASES}/tag/../../other")).is_err());
     }
 }

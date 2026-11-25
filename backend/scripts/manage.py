@@ -54,8 +54,12 @@ def vendor_install(url, filename, arguments=()):
     directory = runtime.HOME / 'downloads/installers'
     directory.mkdir(parents=True, exist_ok=True)
     path = directory / filename
-    with urllib.request.urlopen(url, timeout=60) as response:
-        path.write_bytes(response.read(4 * 1024 * 1024))
+    request = urllib.request.Request(url, headers={'User-Agent': 'SupaDev/1'})
+    with urllib.request.urlopen(request, timeout=60) as response:
+        script = response.read(4 * 1024 * 1024 + 1)
+    if len(script) > 4 * 1024 * 1024:
+        raise RuntimeError(f'Установщик {filename} превышает допустимый размер.')
+    path.write_bytes(script)
     if runtime.WIN:
         command = ['powershell.exe', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', str(path), *arguments]
     else:
@@ -65,7 +69,8 @@ def vendor_install(url, filename, arguments=()):
     log.parent.mkdir(parents=True, exist_ok=True)
     log.write_text(result.stdout + result.stderr, encoding='utf-8')
     if result.returncode:
-        raise RuntimeError(f'Установщик {filename} завершился с ошибкой. Журнал: {log}')
+        detail = (result.stderr.strip() or result.stdout.strip())[-1200:]
+        raise RuntimeError(f'Установщик {filename} завершился с ошибкой:\n{detail}\nЖурнал: {log}')
 
 def install():
     runtime.qwen_key()

@@ -844,6 +844,22 @@ fn run() -> anyhow::Result<()> {
             println!("supa-dev {}", env!("CARGO_PKG_VERSION"));
             return Ok(());
         }
+        Some("--check-updates" | "--download-update") => {
+            let (tx, rx) = mpsc::channel();
+            let output = std::thread::spawn(move || {
+                for event in rx {
+                    println!("{event:?}");
+                }
+            });
+            let result = if args[1] == "--download-update" {
+                updater::download_latest(&tx, &AtomicBool::new(false))
+            } else {
+                updater::check(&tx, &AtomicBool::new(false))
+            };
+            drop(tx);
+            let _ = output.join();
+            return result;
+        }
         Some("--diagnose" | "--bootstrap") => {
             let (tx, rx) = mpsc::channel();
             let logger = std::thread::spawn(move || {

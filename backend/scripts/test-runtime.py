@@ -3,6 +3,7 @@ import copy
 import hashlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import importlib.util
+import io
 import json
 from pathlib import Path
 import tempfile
@@ -75,6 +76,22 @@ class RuntimeTests(unittest.TestCase):
         for path in profiles: self.assertEqual(path.read_text('utf-8'),'user profile')
         self.assertFalse((user/'.local/bin/qwen-work').exists())
         self.assertFalse((runtime.HOME/'alias-installed.json').exists())
+
+    def test_public_installer_accepts_product_user_agent_and_preserves_error_details(self):
+        script=b'#!/bin/sh\nexit 0\n'
+        def endpoint(request,timeout):
+            # LM Studio rejects the default Python urllib User-Agent with HTTP 403.
+            if not request.get_header('User-agent','').startswith('SupaDev/'):
+                raise RuntimeError('HTTP 403: default Python user agent')
+            return io.BytesIO(script)
+        result=Mock(returncode=0,stdout='ready',stderr='')
+        with patch.object(urllib.request,'urlopen',side_effect=endpoint),patch.object(runtime,'run',return_value=result):
+            manager.vendor_install('https://example.invalid/install.sh','installer.sh')
+            self.assertEqual((runtime.HOME/'downloads/installers/installer.sh').read_bytes(),script)
+            result.returncode=1
+            result.stderr='Missing required dependency: libatomic'
+            with self.assertRaisesRegex(RuntimeError,'Missing required dependency: libatomic'):
+                manager.vendor_install('https://example.invalid/install.sh','installer.sh')
 
     def test_non_default_lmstudio_home_and_download_folder(self):
         user=Path.home()
