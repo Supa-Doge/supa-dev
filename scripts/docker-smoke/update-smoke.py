@@ -1,4 +1,4 @@
-"""Exercise a released binary's automatic download and real executable replacement."""
+"""Exercise the public updater downloader and real executable replacement."""
 import hashlib
 import json
 import os
@@ -12,7 +12,10 @@ import uuid
 HOME=Path.home()
 ROOT=HOME/('update-test-'+uuid.uuid4().hex[:8])
 ROOT.mkdir(exist_ok=True)
-LATEST='0.1.1'
+probe=Path(os.environ.get('SUPA_TEST_BINARY',HOME/'release/supa-dev'))
+request=urllib.request.Request('https://github.com/Supa-Doge/supa-dev/releases/latest',method='HEAD',headers={'User-Agent':'SupaDev-Smoke/1'})
+with urllib.request.urlopen(request,timeout=30) as response:
+    LATEST=response.url.rsplit('/',1)[-1].removeprefix('v')
 NAME='supa-dev-linux-x86_64'
 
 def fetch(version,name):
@@ -35,7 +38,7 @@ env={**os.environ,'SUPA_DEV_HOME':str(ROOT/'appdata'),'DISPLAY':':100'}
 appdata=ROOT/'appdata'
 appdata.mkdir(mode=0o700)
 config_file=appdata/'config.json'
-config_data=json.dumps({'workspace':str(ROOT/'custom workspace'),'cloud_model':'qwen3.7-plus','gateway_port':32123,'yolo':False,'setup_completed':True}).encode()
+config_data=json.dumps({'workspace':str(ROOT/'custom workspace'),'cloud_model':'qwen3.7-plus','gateway_port':32123,'yolo':False,'setup_completed':True,'auto_updates':False}).encode()
 config_file.write_bytes(config_data)
 secret_file=appdata/'secrets.bin'
 secret_data=b'{"qwen":"synthetic-update-preservation-test"}'
@@ -47,14 +50,14 @@ with (HOME/'reports/update.log').open('w') as log:
     previous=subprocess.Popen([target],env=env,stdout=log,stderr=log)
     try:
         update=ROOT/'appdata/updates'/LATEST/NAME
-        deadline=time.monotonic()+120
-        while not update.is_file() and time.monotonic()<deadline:
-            assert previous.poll() is None,'Old app exited before downloading update'
-            time.sleep(1)
-        assert update.is_file(),'Automatic update did not download within 120 seconds'
+        # This CLI calls the same downloader as the background update worker.
+        download=subprocess.run([probe,'--download-update'],env=env,stdout=log,stderr=log,timeout=120)
+        assert download.returncode==0,'Public updater download failed'
+        assert previous.poll() is None,'Old app exited before applying update'
+        assert update.is_file(),'Updater did not produce a verified binary'
         expected=checksum(LATEST)
         assert digest(update)==expected,'Automatic download checksum mismatch'
-        print('AUTOMATIC_PUBLIC_DOWNLOAD_PASSED',flush=True)
+        print('PUBLIC_UPDATER_DOWNLOAD_PASSED',flush=True)
         helper=subprocess.Popen([update,'--apply-update',target,update,str(previous.pid)],env=env,stdout=log,stderr=log)
         time.sleep(1)
         previous.terminate()
@@ -70,7 +73,7 @@ with (HOME/'reports/update.log').open('w') as log:
         assert config_file.read_bytes()==config_data,'Update changed user settings'
         assert secret_file.read_bytes()==secret_data,'Update changed user credentials'
         print('REPLACE_BACKUP_AND_RELAUNCH_PASSED '+version,flush=True)
-        (HOME/'reports/update-results.json').write_text(json.dumps({'automatic_download':True,'sha256':True,'replacement':True,'previous_backup':True,'settings_and_key_preserved':True,'version':version},indent=2))
+        (HOME/'reports/update-results.json').write_text(json.dumps({'public_update_download':True,'sha256':True,'replacement':True,'previous_backup':True,'settings_and_key_preserved':True,'version':version},indent=2))
     finally:
         if previous.poll() is None:
             previous.terminate()

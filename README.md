@@ -16,7 +16,7 @@
 Для минимальной Ubuntu/Debian дополнительно нужны системные библиотеки интерфейса и LM Studio. В обычной настольной установке большая часть уже есть:
 
 ```bash
-sudo apt-get install libgl1 libegl1 libx11-6 libxi6 libxcursor1 libxrandr2 libxinerama1 libxkbcommon0 libxkbcommon-x11-0 libwayland-client0 libwayland-cursor0 libwayland-egl1 libdbus-1-3 libatomic1 xterm
+sudo apt-get install libgl1 libegl1 libx11-6 libxi6 libxcursor1 libxrandr2 libxinerama1 libxkbcommon0 libxkbcommon-x11-0 libwayland-client0 libwayland-cursor0 libwayland-egl1 libdbus-1-3 libatomic1 libgomp1 xterm
 ```
 
 `libatomic1` требуется официальному установщику LM Studio. Если системного пакета не хватает, приложение показывает сообщение установщика с командой установки.
@@ -99,4 +99,4 @@ docker exec supa-dev-smoke bash /repo/scripts/docker-smoke/run.sh
 docker exec supa-dev-smoke /home/tester/supa-data/runtime/python-3.13.18/python/bin/python3 /repo/scripts/docker-smoke/update-smoke.py
 ```
 
-`update-smoke.py` проверяет автоматическую загрузку публичного релиза старой версией, замену программы, резервную копию, перезапуск и сохранность настроек/ключа. `cloud-smoke.py` — отдельная необязательная проверка реального облачного Qwen: ключ поступает через stdin и восстанавливается после проверки. Облачная модель должна прочитать файл со случайным содержимым через инструмент. Отчёты находятся в `/home/tester/reports`; их можно забрать через `docker cp`. Это проверка Linux-сборки; она не подменяет проверку нативного Windows-терминала и Windows-механизма замены exe.
+`update-smoke.py` проверяет общий с фоновым обновлением загрузчик через `--download-update`, замену старой программы, резервную копию, перезапуск и сохранность настроек/ключа. `SUPA_TEST_BINARY` позволяет проверить ещё не опубликованный бинарник, а `SUPA_TEST_VERSION` — выбрать релиз для основного сценария. `cloud-smoke.py` — отдельная необязательная проверка реального облачного Qwen: ключ поступает через stdin и восстанавливается после проверки. Облачная модель должна прочитать файл со случайным содержимым через инструмент. Отчёты находятся в `/home/tester/reports`; их можно забрать через `docker cp`. Это проверка Linux-сборки; она не подменяет проверку нативного Windows-терминала и Windows-механизма замены exe.

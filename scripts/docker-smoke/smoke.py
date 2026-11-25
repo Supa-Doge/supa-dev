@@ -52,8 +52,10 @@ def main():
     launcher.ensure_server()
     with urllib.request.urlopen('http://127.0.0.1:1234/v1/models',timeout=30) as response:
         data=json.load(response)
-    assert not data.get('data'), 'Fresh runtime unexpectedly has a model'
-    record('lmstudio_server_without_model')
+    # llmster bundles an embedding asset; its catalog is not the loaded-model list.
+    assert json.loads(run([runtime.lm_program(),'ps','--json']).stdout)==[], 'A model was unexpectedly loaded'
+    assert not runtime.model_path().exists(), 'The excluded local chat model was downloaded'
+    record('lmstudio_server_without_loaded_models')
     launcher.configure()
     key=launcher.ensure_gateway()
     health=launcher.gateway_request('/health')
@@ -95,7 +97,7 @@ def main():
     record('launch_qwen_in_terminal_with_spaced_project_path')
     assert not (HOME/'.local/bin/qwen-work').exists()
     record('no_alias_installed')
-    print('SMOKE_PASSED_NO_MODEL_DOWNLOADED_OR_RUN',flush=True)
+    print('SMOKE_PASSED_NO_LOCAL_CHAT_MODEL_DOWNLOADED_OR_RUN',flush=True)
 
 if __name__=='__main__':
     try:

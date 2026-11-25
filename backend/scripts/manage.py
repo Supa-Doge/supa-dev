@@ -64,7 +64,8 @@ def vendor_install(url, filename, arguments=()):
         command = ['powershell.exe', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', str(path), *arguments]
     else:
         command = ['bash', str(path), *arguments]
-    result = runtime.run(command, timeout=900)
+    # The official full llmster runtime can exceed 1 GB; slow links need more than 15 minutes.
+    result = runtime.run(command, timeout=3600)
     log = runtime.HOME / 'logs' / (filename + '.log')
     log.parent.mkdir(parents=True, exist_ok=True)
     log.write_text(result.stdout + result.stderr, encoding='utf-8')
