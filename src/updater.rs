@@ -39,14 +39,13 @@ fn asset_name() -> &'static str {
 fn get(
     client: &reqwest::blocking::Client,
     url: &str,
-    token: &str,
     binary: bool,
 ) -> Result<reqwest::blocking::Response> {
     anyhow::ensure!(
         url.starts_with("https://api.github.com/"),
         "Некорректный адрес GitHub API"
     );
-    let mut request = client.get(url).header(
+    let request = client.get(url).header(
         "Accept",
         if binary {
             "application/octet-stream"
@@ -54,13 +53,11 @@ fn get(
             "application/vnd.github+json"
         },
     );
-    if !token.is_empty() {
-        request = request.bearer_auth(token);
-    }
     let response = request.send().context("GitHub недоступен")?;
     if matches!(response.status().as_u16(), 401 | 403 | 404) {
         anyhow::bail!(
-            "Приватный релиз недоступен. Выполните gh auth login или укажите GitHub-токен с доступом к Supa-Doge/supa-dev."
+            "Сервер обновлений временно недоступен (HTTP {}). Попробуем снова позже.",
+            response.status()
         );
     }
     anyhow::ensure!(
@@ -79,15 +76,9 @@ fn checksum(text: &str, name: &str) -> Option<String> {
             .then(|| sum.to_ascii_lowercase())
     })
 }
-pub fn check(
-    secrets: &config::Secrets,
-    download: bool,
-    tx: &Sender<Event>,
-    cancel: &AtomicBool,
-) -> Result<()> {
+pub fn check(tx: &Sender<Event>, cancel: &AtomicBool) -> Result<()> {
     let client = bootstrap::client()?;
-    let token = config::github_token(secrets);
-    let release: Release = get(&client, API, &token, false)?
+    let release: Release = get(&client, API, false)?
         .json()
         .context("Некорректное описание релиза")?;
     let version = semver::Version::parse(release.tag_name.trim_start_matches('v'))?;
@@ -97,13 +88,6 @@ pub fn check(
     );
     if version <= semver::Version::parse(env!("CARGO_PKG_VERSION"))? {
         let _ = tx.send(Event::UpdateStatus("Установлена актуальная версия".into()));
-        return Ok(());
-    }
-    if !download {
-        let _ = tx.send(Event::Update(Update {
-            version: version.to_string(),
-            path: None,
-        }));
         return Ok(());
     }
     let name = asset_name();
@@ -124,20 +108,23 @@ pub fn check(
             .iter()
             .find(|a| a.name == "SHA256SUMS")
             .context("В релизе отсутствует SHA256SUMS")?;
-        checksum(&get(&client, &sums.url, &token, true)?.text()?, name)
+        checksum(&get(&client, &sums.url, true)?.text()?, name)
             .context("Нет контрольной суммы приложения")?
     };
     let path = config::home()
         .join("updates")
         .join(version.to_string())
         .join(name);
-    bootstrap::download(
-        get(&client, &asset.url, &token, true)?,
-        &path,
-        "Обновление Supa Dev",
-        tx,
-        cancel,
-    )?;
+    // Reuse a verified download after choosing "Later" or restarting the app.
+    if !path.is_file() || bootstrap::sha256(&path)? != expected.to_ascii_lowercase() {
+        bootstrap::download(
+            get(&client, &asset.url, true)?,
+            &path,
+            "Обновление Supa Dev",
+            tx,
+            cancel,
+        )?;
+    }
     anyhow::ensure!(
         bootstrap::sha256(&path)? == expected.to_ascii_lowercase(),
         "SHA-256 обновления не совпал"

@@ -4,11 +4,9 @@ import importlib.util
 import json
 import os
 from pathlib import Path
-import shlex
 import shutil
 import subprocess
 import sys
-import time
 import urllib.request
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import runtime
@@ -42,7 +40,6 @@ def status():
         'lmstudio': {'ready': bool(lm), 'detail': lm or 'Официальный runtime LM Studio / llmster'},
         'model': {'ready': path.is_file() and path.stat().st_size == model['sizeBytes'], 'detail': str(path)},
         'gateway': {'ready': False, 'detail': f'127.0.0.1:{runtime.gateway_config()["port"]}'},
-        'alias': {'ready': (runtime.HOME / 'alias-installed.json').exists(), 'detail': 'qwen-work'},
     }
     try:
         launcher = module('qwen_launcher', runtime.ROOT / 'scripts/qwen-work.py')
@@ -70,57 +67,6 @@ def vendor_install(url, filename, arguments=()):
     if result.returncode:
         raise RuntimeError(f'Установщик {filename} завершился с ошибкой. Журнал: {log}')
 
-def set_block(path, block):
-    start, end = '# >>> Supa Dev qwen-work >>>', '# <<< Supa Dev qwen-work <<<'
-    path.parent.mkdir(parents=True, exist_ok=True)
-    text = path.read_text('utf-8-sig') if path.exists() else ''
-    before = text
-    if start in text:
-        left, _, right = text.partition(start)
-        _, separator, right = right.partition(end)
-        if not separator:
-            raise RuntimeError(f'Незавершённый блок Supa Dev в {path}; файл оставлен без изменений.')
-        text = left.rstrip() + '\n' + right.lstrip('\r\n')
-    text = text.rstrip() + '\n\n' + start + '\n' + block + '\n' + end + '\n'
-    if before != text:
-        if path.exists():
-            backup = path.with_name(path.name + f'.supa-backup-{time.time_ns()}')
-            shutil.copy2(path, backup)
-        path.write_text(text, encoding='utf-8-sig' if path.suffix.lower() == '.ps1' else 'utf-8')
-
-def aliases():
-    python = str(Path(sys.executable).resolve())
-    launcher = str(runtime.ROOT / 'scripts/qwen-work.py')
-    if runtime.WIN:
-        quote = lambda value: "'" + value.replace("'", "''") + "'"
-        block = ('function global:qwen-work {\n'
-                 f'    $env:SUPA_DEV_HOME = {quote(str(runtime.HOME))}\n'
-                 f'    & {quote(python)} {quote(launcher)} @args\n'
-                 '}')
-        profiles = []
-        for shell in ('powershell.exe', 'pwsh.exe'):
-            if not shutil.which(shell):
-                continue
-            result = runtime.run([shell, '-NoProfile', '-Command', '[Console]::OutputEncoding = [Text.UTF8Encoding]::new(); $PROFILE.CurrentUserAllHosts'])
-            if result.returncode == 0 and result.stdout.strip():
-                profiles.append(Path(result.stdout.strip()))
-        for profile in set(profiles):
-            set_block(profile, block)
-        # Matches the supplied team installation instructions, without requiring elevation.
-        runtime.run(['powershell.exe', '-NoProfile', '-Command',
-                     "if ((Get-ExecutionPolicy -Scope CurrentUser) -in @('Undefined','Restricted')) { Set-ExecutionPolicy -Scope CurrentUser RemoteSigned -Force }"])
-        destination = runtime.HOME / 'qwen-work.ps1'
-        destination.write_text(f'$env:SUPA_DEV_HOME = {quote(str(runtime.HOME))}\n& {quote(python)} {quote(launcher)} @args\n', encoding='utf-8-sig')
-    else:
-        destination = Path.home() / '.local/bin/qwen-work'
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        destination.write_text('#!/usr/bin/env bash\n' + f'export SUPA_DEV_HOME={shlex.quote(str(runtime.HOME))}\n' +
-                               f'exec {shlex.quote(python)} {shlex.quote(launcher)} "$@"\n', encoding='utf-8')
-        destination.chmod(0o700)
-        for profile in (Path.home() / '.bashrc', Path.home() / '.zshrc'):
-            set_block(profile, 'export PATH="$HOME/.local/bin:$PATH"')
-    runtime.save(runtime.HOME / 'alias-installed.json', {'path': str(destination), 'installed': time.time()})
-
 def install():
     runtime.qwen_key()
     progress('Проверка Qwen Code')
@@ -144,8 +90,6 @@ def install():
     progress('Настройка облачной модели и шлюза')
     launcher.configure()
     launcher.ensure_gateway()
-    progress('Добавление qwen-work в профиль терминала')
-    aliases()
     status()
     progress('Окружение готово', 1)
 
@@ -178,7 +122,7 @@ def launch(project):
                 subprocess.Popen([terminal, separator, *args], cwd=folder, env=env, start_new_session=True)
                 break
         else:
-            raise RuntimeError('Не найден терминал. Установите xterm или запустите qwen-work в своём терминале.')
+            raise RuntimeError('Не найден терминал. Установите xterm и повторите запуск.')
     emit('log', message='Qwen открыт в терминале.')
 
 def main():
@@ -194,7 +138,6 @@ def main():
         launch(args.project)
     else:
         module('qwen_launcher', runtime.ROOT / 'scripts/qwen-work.py').configure()
-        aliases()
         status()
     emit('done')
 

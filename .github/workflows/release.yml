@@ -31,6 +31,14 @@ jobs:
       - uses: dtolnay/rust-toolchain@1.93.0
         with:
           components: rustfmt
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: rust-1.93-${{ runner.os }}-${{ hashFiles('Cargo.lock', '.cargo/config.toml') }}
+          restore-keys: rust-1.93-${{ runner.os }}-
       - name: Linux desktop dependencies
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libx11-dev libxi-dev libxcursor-dev libxrandr-dev libxinerama-dev libgl1-mesa-dev libxkbcommon-dev libwayland-dev pkg-config
@@ -46,7 +54,7 @@ jobs:
       - name: Rust checks
         run: |
           cargo fmt --check
-          cargo test --release --locked
+          cargo test --locked
       - name: Build
         run: cargo build --release --locked
       - name: Prepare asset
@@ -77,4 +85,4 @@ jobs:
           RELEASE_TAG: ${{ github.ref_name }}
         run: |
           sha256sum supa-dev-windows-x86_64.exe supa-dev-linux-x86_64 > SHA256SUMS
-          gh release create "$RELEASE_TAG" supa-dev-windows-x86_64.exe supa-dev-linux-x86_64 SHA256SUMS --verify-tag --title "Supa Dev $RELEASE_TAG" --notes 'Менеджер окружения Qwen Code: настройка ключа, установка LM Studio runtime и локального редактора, qwen-work, запуск терминала и обновления приложения. Ключи вводятся пользователями и не входят в сборку. Windows x64 / Linux x64 (glibc 2.35+).'
+          gh release create "$RELEASE_TAG" supa-dev-windows-x86_64.exe supa-dev-linux-x86_64 SHA256SUMS --verify-tag --title "Supa Dev $RELEASE_TAG" --notes 'Мастер первого запуска с вводом ключа Qwen, выбор модели из списка, запуск Qwen кнопкой. Алиас и настройки GitHub-токена убраны. Обновления скачиваются автоматически и показывают диалог «Найдено обновление. Обновиться?». Windows x64 / Linux x64 (glibc 2.35+).'

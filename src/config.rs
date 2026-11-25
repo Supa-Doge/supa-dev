@@ -12,7 +12,7 @@ pub struct Settings {
     pub workspace: String,
     pub cloud_model: String,
     pub gateway_port: u16,
-    pub auto_updates: bool,
+    pub setup_completed: bool,
     pub yolo: bool,
 }
 impl Default for Settings {
@@ -26,7 +26,7 @@ impl Default for Settings {
             workspace: desktop.join("qwen").to_string_lossy().into(),
             cloud_model: "qwen4-max".into(),
             gateway_port: 1236,
-            auto_updates: true,
+            setup_completed: false,
             yolo: true,
         }
     }
@@ -34,7 +34,6 @@ impl Default for Settings {
 #[derive(Clone, Default, Serialize, Deserialize)]
 pub struct Secrets {
     pub qwen: String,
-    pub github: String,
 }
 
 pub fn home() -> PathBuf {
@@ -105,25 +104,6 @@ pub fn command(program: impl AsRef<std::ffi::OsStr>) -> Command {
         command.creation_flags(0x08000000);
     }
     command
-}
-pub fn github_token(secrets: &Secrets) -> String {
-    if !secrets.github.trim().is_empty() {
-        return secrets.github.trim().into();
-    }
-    for name in ["GH_TOKEN", "GITHUB_TOKEN"] {
-        if let Ok(value) = std::env::var(name) {
-            if !value.is_empty() {
-                return value;
-            }
-        }
-    }
-    command("gh")
-        .args(["auth", "token", "--hostname", "github.com"])
-        .output()
-        .ok()
-        .filter(|o| o.status.success())
-        .map(|o| String::from_utf8_lossy(&o.stdout).trim().into())
-        .unwrap_or_default()
 }
 pub fn import_qwen_key() -> Option<String> {
     if let Ok(key) = std::env::var("QWENCLOUD_TOKEN_PLAN_API_KEY") {

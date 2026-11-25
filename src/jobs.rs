@@ -17,7 +17,7 @@ pub enum Event {
     Progress(String, f32),
     Status(serde_json::Value),
     Error(String),
-    Done,
+    Done(bool),
     Update(updater::Update),
     UpdateStatus(String),
 }
@@ -27,7 +27,7 @@ pub enum Action {
     Inspect,
     Configure,
     Launch(String),
-    CheckUpdate(bool),
+    CheckUpdate,
 }
 
 pub fn start(
@@ -39,8 +39,8 @@ pub fn start(
 ) {
     thread::spawn(move || {
         let result = (|| -> anyhow::Result<()> {
-            if let Action::CheckUpdate(download) = action {
-                return updater::check(&secrets, download, &tx, &cancel);
+            if let Action::CheckUpdate = action {
+                return updater::check(&tx, &cancel);
             }
             config::save(&settings, &secrets)?;
             let python = bootstrap::ensure(&tx, &cancel)?;
@@ -129,9 +129,10 @@ pub fn start(
             anyhow::ensure!(status.success(), "Операция не завершена; подробности выше.");
             Ok(())
         })();
+        let success = result.is_ok();
         if let Err(error) = result {
             let _ = tx.send(Event::Error(format!("{error:#}")));
         }
-        let _ = tx.send(Event::Done);
+        let _ = tx.send(Event::Done(success));
     });
 }

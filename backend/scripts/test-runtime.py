@@ -8,7 +8,7 @@ from pathlib import Path
 import tempfile
 import threading
 import unittest
-from unittest.mock import patch
+from unittest.mock import patch, Mock
 import urllib.request
 import runtime
 
@@ -61,27 +61,20 @@ class RuntimeTests(unittest.TestCase):
         launcher.configure()
         self.assertEqual(runtime.read(path)['model']['name'],'cloud-c')
 
-    def test_profile_block_is_idempotent_and_backs_up_user_content(self):
-        path=self.home/'profile.ps1'
-        original="function custom { 'preserve me' }\n"
-        path.write_text(original,encoding='utf-8')
-        manager.set_block(path,'function qwen-work {}')
-        first=path.read_text('utf-8-sig')
-        manager.set_block(path,'function qwen-work {}')
-        self.assertEqual(first,path.read_text('utf-8-sig'))
-        self.assertIn(original,first)
-        backups=list(path.parent.glob('profile.ps1.supa-backup-*'))
-        self.assertEqual(len(backups),1)
-        self.assertEqual(backups[0].read_text('utf-8'),original)
-        manager.set_block(path,'function qwen-work { updated }')
-        self.assertEqual(path.read_text('utf-8').count('# >>> Supa Dev qwen-work >>>'),1)
-
-    def test_incomplete_profile_block_is_not_overwritten(self):
-        path=self.home/'profile.ps1'
-        original='# >>> Supa Dev qwen-work >>>\nuser content'
-        path.write_text(original,encoding='utf-8')
-        with self.assertRaises(RuntimeError): manager.set_block(path,'replacement')
-        self.assertEqual(path.read_text('utf-8'),original)
+    def test_install_does_not_modify_shell_profiles_or_create_aliases(self):
+        # All external operations are stubs; never download or run the real model.
+        user=Path.home()
+        user.mkdir()
+        profiles=[user/'.bashrc', user/'profile.ps1']
+        for path in profiles: path.write_text('user profile',encoding='utf-8')
+        fake_launcher, fake_downloader=Mock(), Mock()
+        with patch.object(runtime,'qwen_key',return_value='synthetic'), patch.object(manager,'installed',return_value=True), patch.object(manager,'module',side_effect=[fake_launcher,fake_downloader]), patch.object(manager,'status'), patch.object(manager,'emit'), patch.object(runtime,'run',side_effect=AssertionError('Unexpected shell command')):
+            manager.install()
+        fake_launcher.ensure_gateway.assert_called_once()
+        fake_downloader.download.assert_called_once()
+        for path in profiles: self.assertEqual(path.read_text('utf-8'),'user profile')
+        self.assertFalse((user/'.local/bin/qwen-work').exists())
+        self.assertFalse((runtime.HOME/'alias-installed.json').exists())
 
     def test_non_default_lmstudio_home_and_download_folder(self):
         user=Path.home()
