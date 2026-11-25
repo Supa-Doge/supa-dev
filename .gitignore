@@ -1,0 +1,17 @@
+/target/
+/dist/
+/artifacts/
+/backend/**/node_modules/
+/backend/**/__pycache__/
+/backend/temp/
+/backend/output/
+/backend/projects/
+/backend/.qwen/
+/backend/config/gateway-control.key
+/backend/config/gateway.runtime.json
+*.part
+*.log
+*.pdb
+.env*
+secrets.*
+settings.local.json

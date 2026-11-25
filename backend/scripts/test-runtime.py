@@ -1,0 +1,137 @@
+"""Portable installer regressions. Temporary directories and loopback HTTP only."""
+import copy
+import hashlib
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import importlib.util
+import json
+from pathlib import Path
+import tempfile
+import threading
+import unittest
+from unittest.mock import patch
+import urllib.request
+import runtime
+
+def module(name, filename):
+    spec = importlib.util.spec_from_file_location(name, Path(__file__).parent / filename)
+    value = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(value)
+    return value
+
+launcher = module('launcher_test', 'qwen-work.py')
+manager = module('manager_test', 'manage.py')
+downloader = module('downloader_test', 'download-model.py')
+
+class RuntimeTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(prefix='supa-runtime-')
+        self.addCleanup(self.temp.cleanup)
+        self.home = Path(self.temp.name)
+        self.backend = self.home / 'runtime/backend'
+        self.backend.mkdir(parents=True)
+        for target, key, value in [(runtime,'HOME',self.home), (runtime,'ROOT',self.backend), (launcher,'ROOT',self.backend)]:
+            patcher = patch.object(target,key,value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        user = patch.object(Path,'home',return_value=self.home / 'user')
+        user.start()
+        self.addCleanup(user.stop)
+        runtime.save(self.home / 'config.json', {'workspace':str(self.home/'work'), 'cloud_model':'cloud-a', 'gateway_port':45678})
+        gateway = copy.deepcopy(launcher.GATEWAY)
+        gateway.update(cloudModels=['cloud-a','cloud-b'],cloudModel='cloud-a',port=45678)
+        runtime.save(self.backend/'config/gateway.json',gateway)
+        replace = patch.object(launcher,'GATEWAY',gateway)
+        replace.start()
+        self.addCleanup(replace.stop)
+
+    def test_native_model_and_tool_preferences_survive_repeated_configuration(self):
+        path = self.home/'qwen-profile/settings.json'
+        runtime.save(path, {'tools':{'allowed':['*']},'mcpServers':{'example':{'command':'node'}},'model':{'name':'original'}})
+        launcher.configure()
+        configured=runtime.read(path)
+        self.assertEqual(configured['model']['name'],'cloud-a')
+        configured['model']['name']='cloud-b'  # native /model persists its own choice
+        runtime.save(path,configured)
+        launcher.configure()
+        after=runtime.read(path)
+        self.assertEqual(after['model']['name'],'cloud-b')
+        self.assertEqual(after['tools'],{'allowed':['*']})
+        self.assertEqual(after['mcpServers'],configured['mcpServers'])
+        launcher.GATEWAY['cloudModel']='cloud-c'
+        launcher.configure()
+        self.assertEqual(runtime.read(path)['model']['name'],'cloud-c')
+
+    def test_profile_block_is_idempotent_and_backs_up_user_content(self):
+        path=self.home/'profile.ps1'
+        original="function custom { 'preserve me' }\n"
+        path.write_text(original,encoding='utf-8')
+        manager.set_block(path,'function qwen-work {}')
+        first=path.read_text('utf-8-sig')
+        manager.set_block(path,'function qwen-work {}')
+        self.assertEqual(first,path.read_text('utf-8-sig'))
+        self.assertIn(original,first)
+        backups=list(path.parent.glob('profile.ps1.supa-backup-*'))
+        self.assertEqual(len(backups),1)
+        self.assertEqual(backups[0].read_text('utf-8'),original)
+        manager.set_block(path,'function qwen-work { updated }')
+        self.assertEqual(path.read_text('utf-8').count('# >>> Supa Dev qwen-work >>>'),1)
+
+    def test_incomplete_profile_block_is_not_overwritten(self):
+        path=self.home/'profile.ps1'
+        original='# >>> Supa Dev qwen-work >>>\nuser content'
+        path.write_text(original,encoding='utf-8')
+        with self.assertRaises(RuntimeError): manager.set_block(path,'replacement')
+        self.assertEqual(path.read_text('utf-8'),original)
+
+    def test_non_default_lmstudio_home_and_download_folder(self):
+        user=Path.home()
+        user.mkdir()
+        custom=self.home/'custom lm'
+        (user/'.lmstudio-home-pointer').write_text(str(custom),encoding='utf-8')
+        runtime.save(custom/'settings.json',{'downloadsFolder':str(self.home/'GGUF models')})
+        self.assertEqual(runtime.model_directory(),self.home/'GGUF models')
+
+    def test_native_arguments_are_forwarded(self):
+        args=['--resume','some-session','--model','custom-cloud','--approval-mode=default','--include-directories','../other']
+        self.assertEqual(launcher.qwen_command(('', '', 'node','cli'),{},self.home,args),['node','--expose-gc','cli',*args])
+
+    def test_resumable_model_download_hash_and_existing_file_reuse(self):
+        body=b'synthetic gguf bytes\x00' * 256
+        digest=hashlib.sha256(body).hexdigest()
+        model={'repository':'test/model','revision':'fixed','filename':'synthetic.gguf','sizeBytes':len(body),'sha256':digest}
+        runtime.save(self.backend/'config/local-model.json',model)
+        pieces=self.home/'downloads'/digest
+        pieces.mkdir(parents=True)
+        (pieces/'00000.part').write_bytes(body[:13])
+        requests=[]
+        class Handler(BaseHTTPRequestHandler):
+            def log_message(self,*args): pass
+            def do_GET(self):
+                start,end=map(int,self.headers['Range'].removeprefix('bytes=').split('-'))
+                requests.append((start,end))
+                self.send_response(206)
+                self.send_header('Content-Range',f'bytes {start}-{end}/{len(body)}')
+                self.end_headers()
+                self.wfile.write(body[start:end+1])
+        server=ThreadingHTTPServer(('127.0.0.1',0),Handler)
+        worker=threading.Thread(target=server.serve_forever,daemon=True)
+        worker.start()
+        real_open=urllib.request.build_opener(urllib.request.ProxyHandler({})).open
+        def local_open(request,timeout):
+            return real_open(urllib.request.Request(f'http://127.0.0.1:{server.server_port}/model',headers=dict(request.header_items())),timeout=timeout)
+        try:
+            with patch.object(urllib.request,'urlopen',side_effect=local_open):
+                target=downloader.download()
+                self.assertEqual(target.read_bytes(),body)
+                self.assertEqual(requests,[(13,len(body)-1)])
+                self.assertFalse(list(pieces.glob('*.part')))
+                downloader.download()
+                self.assertEqual(len(requests),1)
+        finally:
+            server.shutdown()
+            server.server_close()
+        target.write_bytes(b'x'*len(body))
+        with self.assertRaisesRegex(RuntimeError,'контрольная сумма'): downloader.download()
+        self.assertEqual(target.read_bytes(),b'x'*len(body))
+
+if __name__=='__main__': unittest.main(verbosity=2)

@@ -1,0 +1,22 @@
+{
+  "repository": "huihui-ai/Huihui-Qwen3.8-27B-abliterated-GGUF",
+  "sourceRepository": "huihui-ai/Huihui-Qwen3.8-27B-abliterated",
+  "revision": "c4b90228246aef7ecc6cb2be9d80575a911a0f3a",
+  "filename": "Huihui-Qwen3.8-27B-abliterated-Q4_K.gguf",
+  "sizeBytes": 16810714400,
+  "sha256": "6c2c13cef89238c3604d756b07b3ef5fafebbd61095feb8553ff449c95e4c1c6",
+  "identifier": "local-coder",
+  "baseUrl": "http://127.0.0.1:1234/v1",
+  "contextLength": 16384,
+  "maximumContextLength": 32768,
+  "gpuOffload": "auto",
+  "flashAttention": true,
+  "kvCache": "q8_0",
+  "temperature": 0.2,
+  "parallelRequests": 1,
+  "evalBatchSize": 128,
+  "vramReserveMiB": 1536,
+  "computeBudgetMiB": 1024,
+  "kvBytesPerToken": 34816,
+  "downloadWorkers": 24
+}

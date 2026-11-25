@@ -1,0 +1,8 @@
+{
+  "name": "supa-dev-lmstudio-client",
+  "private": true,
+  "type": "module",
+  "scripts": {"bundle": "esbuild load-model.mjs --bundle --platform=node --format=esm --minify --legal-comments=inline --external:bufferutil --external:utf-8-validate --banner:js=\"import { createRequire } from 'node:module'; const require = createRequire(import.meta.url);\" --outfile=load-model.bundle.mjs"},
+  "dependencies": {"@lmstudio/sdk": "2.1.0"},
+  "devDependencies": {"esbuild": "0.25.12"}
+}
