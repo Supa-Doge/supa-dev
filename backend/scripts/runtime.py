@@ -30,6 +30,9 @@ def save(path, data):
 def settings():
     return read(HOME / 'config.json')
 
+def editor_enabled():
+    return read(HOME / 'local-editor.json').get('enabled', True) is not False
+
 def secrets():
     path = HOME / 'secrets.bin'
     if not path.exists():

@@ -127,6 +127,10 @@ def ensure_server(paths=None, env=None):
         raise RuntimeError('Не удалось запустить локальный API LM Studio: ' + result.stderr[-500:])
 
 def ensure_model(paths=None, env=None, context=16384):
+    # An older, still-active gateway may import this file after an app update while
+    # retaining its previous runtime module in memory. Use the existing read API.
+    if runtime.read(runtime.HOME / 'local-editor.json').get('enabled', True) is False:
+        raise RuntimeError('Локальный редактор остановлен в Supa Dev.')
     ensure_server()
     model = read(ROOT / 'config/local-model.json')
     path = runtime.model_path()
@@ -136,6 +140,29 @@ def ensure_model(paths=None, env=None, context=16384):
     result = runtime.run([node, ROOT / 'components/lmstudio-client/load-model.bundle.mjs', str(context)], timeout=300)
     if result.returncode:
         raise RuntimeError('Не удалось подготовить редактор промпта. См. журнал загрузки модели в Supa Dev.')
+
+def release_model():
+    # Status is read-only. Do not use a CLI command that starts a stopped daemon implicitly.
+    try:
+        lms = runtime.lm_program()
+    except RuntimeError:
+        return
+    result = runtime.run([lms, 'daemon', 'status', '--json'], timeout=10)
+    try:
+        daemon = json.loads(result.stdout)
+    except ValueError as error:
+        raise RuntimeError('LM Studio не ответил на проверку состояния; выгрузка не подтверждена.') from error
+    if daemon.get('status') == 'not-running':
+        return
+    if result.returncode or daemon.get('status') != 'running':
+        raise RuntimeError('Не удалось проверить состояние LM Studio; выгрузка не подтверждена.')
+    node, _ = runtime.qwen_programs()
+    try:
+        result = runtime.run([node, ROOT / 'components/lmstudio-client/load-model.bundle.mjs', '--unload'], timeout=15)
+    except subprocess.TimeoutExpired as error:
+        raise RuntimeError('LM Studio не завершил выгрузку за 15 секунд. Редактор не будет загружаться повторно, если остановлен кнопкой. Сохраните диагностику процессов.') from error
+    if result.returncode:
+        raise RuntimeError('Выгрузка редактора не подтверждена: ' + result.stderr[-500:])
 
 def qwen_command(paths, env, project, args):
     return [paths[2], '--expose-gc', paths[3], *args]

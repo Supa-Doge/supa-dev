@@ -51,6 +51,7 @@ jobs:
         run: |
           python backend/scripts/test-gateway-repair.py --synthetic-only
           python backend/scripts/test-runtime.py
+          node --experimental-vm-modules backend/components/lmstudio-client/test-lifecycle.mjs
       - name: Rust checks
         run: |
           cargo fmt --check
@@ -85,4 +86,4 @@ jobs:
           RELEASE_TAG: ${{ github.ref_name }}
         run: |
           sha256sum supa-dev-windows-x86_64.exe supa-dev-linux-x86_64 > SHA256SUMS
-          gh release create "$RELEASE_TAG" supa-dev-windows-x86_64.exe supa-dev-linux-x86_64 SHA256SUMS --verify-tag --title "Supa Dev $RELEASE_TAG" --notes 'Исправления по результатам проверки в чистой Ubuntu Docker: установщик LM Studio скачивается без HTTP 403; таймаут для большого runtime увеличен до часа; обновления используют публичные ссылки Releases и SHA-256 вместо ограниченного GitHub REST API. Проверены реальный облачный Qwen с инструментом чтения файла, запуск терминала, гейтвей, установка компонентов и замена бинарника с сохранением настроек. Локальная чат-модель исключена из проверки. Windows x64 / Linux x64 (glibc 2.35+).'
+          gh release create "$RELEASE_TAG" supa-dev-windows-x86_64.exe supa-dev-linux-x86_64 SHA256SUMS --verify-tag --title "Supa Dev $RELEASE_TAG" --notes 'Управление памятью локального редактора: установка больше не запускает API LM Studio; после правки гейтвей запрашивает выгрузку модели; запасной TTL — 60 секунд простоя. Добавлены кнопки остановки/выгрузки и повторного включения редактора. Остановка предотвращает его повторную загрузку, облачный Qwen продолжает работать. Таймаут выгрузки отображается как ошибка. Проверки SDK, загрузки и отмены выполнены на заглушках: настоящая локальная модель не запускалась. Причина отказа принудительного завершения llama-server.exe на конкретном компьютере требует диагностики. Windows x64 / Linux x64 (glibc 2.35+).'

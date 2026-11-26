@@ -65,6 +65,13 @@ pub fn private_write(path: &Path, bytes: &[u8]) -> Result<()> {
     fs::write(path, bytes)?;
     Ok(())
 }
+pub fn editor_enabled() -> bool {
+    fs::read(home().join("local-editor.json"))
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
+        .and_then(|value| value["enabled"].as_bool())
+        .unwrap_or(true)
+}
 pub fn load() -> (Settings, Secrets) {
     let dir = home();
     let settings = fs::read(dir.join("config.json"))

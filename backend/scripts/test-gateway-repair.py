@@ -140,6 +140,46 @@ class GatewayTests(unittest.TestCase):
         self.assertEqual(len(self.local.calls), 0)
         self.assertEqual(self.cloud.calls[0]['authorization'], 'Bearer synthetic-cloud-key')
 
+    def test_editor_released_after_success_and_reprepared_for_next_repair(self):
+        calls = []
+        self.gateway.local_preparer = lambda _: calls.append('prepare')
+        self.gateway.local_releaser = lambda: calls.append('release')
+        for _ in range(2):
+            self.cloud.statuses = [400, 200]
+            self.assertEqual(self.call()[0], 200)
+        self.assertEqual(calls, ['prepare','release','prepare','release'])
+
+    def test_editor_released_after_local_failure_and_partial_load_failure(self):
+        releases = []
+        self.gateway.local_releaser = lambda: releases.append(True)
+        self.cloud.statuses = [400]
+        self.local.status = 500
+        self.assertEqual(self.call()[0], 503)
+        self.assertEqual(len(releases), 1)
+        def broken_load(_): raise RuntimeError('partial synthetic load')
+        self.gateway.local_preparer = broken_load
+        self.cloud.statuses = [400]
+        self.assertEqual(self.call()[0], 503)
+        self.assertEqual(len(releases), 2)
+
+    def test_cleanup_failure_keeps_valid_cloud_retry(self):
+        def broken_unload(): raise RuntimeError('synthetic unload timeout')
+        self.gateway.local_releaser = broken_unload
+        self.cloud.statuses = [400, 200]
+        self.assertEqual(self.call()[0], 200)
+        self.assertIn('local_editor_unload_failed', self.gateway.event_log.read_text('utf-8'))
+
+    def test_paused_editor_never_reloads_but_cloud_still_works(self):
+        self.gateway.editor_enabled = lambda: False
+        def unexpected_load(_): raise AssertionError('paused editor must not load')
+        self.gateway.local_preparer = unexpected_load
+        self.assertEqual(self.call()[0], 200)
+        self.cloud.statuses = [400]
+        status, _, data = self.call()
+        self.assertEqual(status, 503)
+        self.assertIn(b'stopped in Supa Dev', data)
+        self.assertEqual(len(self.local.calls), 0)
+
     def test_selected_cloud_model_survives_prompt_repair(self):
         self.cloud.statuses = [400, 200]
         body = payload()

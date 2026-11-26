@@ -40,6 +40,7 @@ def status():
         'lmstudio': {'ready': bool(lm), 'detail': lm or 'Официальный runtime LM Studio / llmster'},
         'model': {'ready': path.is_file() and path.stat().st_size == model['sizeBytes'], 'detail': str(path)},
         'gateway': {'ready': False, 'detail': f'127.0.0.1:{runtime.gateway_config()["port"]}'},
+        'local_editor': {'enabled': runtime.editor_enabled()},
     }
     try:
         launcher = module('qwen_launcher', runtime.ROOT / 'scripts/qwen-work.py')
@@ -89,8 +90,6 @@ def install():
         vendor_install(f'https://lmstudio.ai/install.{suffix}', f'install-lmstudio.{suffix}')
         runtime.lm_program()
     launcher = module('qwen_launcher', runtime.ROOT / 'scripts/qwen-work.py')
-    progress('Запуск локального API LM Studio')
-    launcher.ensure_server()
     downloader = module('model_downloader', runtime.ROOT / 'scripts/download-model.py')
     downloader.download(progress)
     progress('Настройка облачной модели и шлюза')
@@ -98,6 +97,19 @@ def install():
     launcher.ensure_gateway()
     status()
     progress('Окружение готово', 1)
+
+def stop_local():
+    # Persist the stop before contacting the runtime: an in-flight loader must not reload it.
+    runtime.save(runtime.HOME / 'local-editor.json', {'enabled': False})
+    status()
+    progress('Остановка и выгрузка локального редактора')
+    module('qwen_launcher', runtime.ROOT / 'scripts/qwen-work.py').release_model()
+    progress('Локальный редактор остановлен. Облачный Qwen продолжает работать.', 1)
+
+def resume_local():
+    runtime.save(runtime.HOME / 'local-editor.json', {'enabled': True})
+    status()
+    progress('Редактор включён. Модель загрузится только при необходимости правки.', 1)
 
 def launch(project):
     folder = Path(project).expanduser().resolve() if project else runtime.workspace()
@@ -133,7 +145,7 @@ def launch(project):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('action', choices=['status','install','configure','launch'])
+    parser.add_argument('action', choices=['status','install','configure','launch','stop-local','resume-local'])
     parser.add_argument('--project')
     args = parser.parse_args()
     if args.action == 'status':
@@ -142,6 +154,10 @@ def main():
         install()
     elif args.action == 'launch':
         launch(args.project)
+    elif args.action == 'stop-local':
+        stop_local()
+    elif args.action == 'resume-local':
+        resume_local()
     else:
         module('qwen_launcher', runtime.ROOT / 'scripts/qwen-work.py').configure()
         status()

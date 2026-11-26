@@ -92,7 +92,7 @@ impl App {
             tx,
             rx,
             progress: ("Готов к настройке".into(), 0.),
-            status: serde_json::Value::Null,
+            status: serde_json::json!({"local_editor": {"enabled": config::editor_enabled()}}),
             logs: vec![],
             error: None,
             update: None,
@@ -251,7 +251,31 @@ impl App {
                 self.start(jobs::Action::Inspect);
             }
         });
-        ui.label(RichText::new("Уже установленные компоненты используются повторно. Модель загружается в память при первой правке промпта.").size(13.).color(MUTED));
+        ui.label(RichText::new("Модель загружается только для правки промпта и выгружается после неё. При простое — автоматическая выгрузка через 60 секунд.").size(13.).color(MUTED));
+        let editor_enabled = self.status["local_editor"]["enabled"]
+            .as_bool()
+            .unwrap_or(true);
+        ui.horizontal(|ui| {
+            if ui
+                .add_enabled(
+                    !self.busy,
+                    egui::Button::new("Остановить и выгрузить редактор"),
+                )
+                .clicked()
+            {
+                self.start(jobs::Action::StopLocal);
+            }
+            if !editor_enabled
+                && ui
+                    .add_enabled(!self.busy, egui::Button::new("Включить редактор"))
+                    .clicked()
+            {
+                self.start(jobs::Action::ResumeLocal);
+            }
+        });
+        if !editor_enabled {
+            ui.label(RichText::new("Редактор остановлен. Облачный Qwen доступен; правка отклонённых промптов возобновится после включения редактора.").size(13.).color(MUTED));
+        }
         ui.separator();
         ui.label(RichText::new("Открыть проект").size(20.).strong());
         ui.add(

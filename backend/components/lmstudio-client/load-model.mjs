@@ -8,10 +8,17 @@ import { inspect } from 'node:util';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const config = JSON.parse(fs.readFileSync(path.join(root, 'config/local-model.json'), 'utf8'));
-const contextLength = Number(process.argv[2] || config.contextLength);
+const unloadOnly = process.argv.includes('--unload');
+const contextLength = Number((unloadOnly ? null : process.argv[2]) || config.contextLength);
+const idleTtlSeconds = 60;
+const appHome = process.env.SUPA_DEV_HOME || path.resolve(root, '../..');
+function editorEnabled() {
+  try { return JSON.parse(fs.readFileSync(path.join(appHome, 'local-editor.json'), 'utf8')).enabled !== false; }
+  catch (error) { if (error.code === 'ENOENT') return true; throw error; }
+}
 const automaticGpu = config.gpuOffload === 'auto';
 const nvidia = process.platform === 'win32' ? 'nvidia-smi.exe' : 'nvidia-smi';
-const gpuAvailable = spawnSync(nvidia, ['--query-gpu=memory.free', '--format=csv,noheader,nounits'], { windowsHide: true, timeout: 10000 }).status === 0;
+const gpuAvailable = !unloadOnly && spawnSync(nvidia, ['--query-gpu=memory.free', '--format=csv,noheader,nounits'], { windowsHide: true, timeout: 10000 }).status === 0;
 let gpuRatio = automaticGpu ? (gpuAvailable ? 1 : 0) : config.gpuOffload === 'max' ? 1 : Number(config.gpuOffload);
 if (!Number.isFinite(gpuRatio) || gpuRatio < 0 || gpuRatio > 1) throw new Error('gpuOffload must be auto, max or a ratio from 0 to 1.');
 const estimateOnly = process.argv.includes('--estimate-only');
@@ -58,10 +65,22 @@ function writeReport(report) {
 }
 async function main() {
   const existing = (await client.llm.listLoaded()).find(m => m.identifier === config.identifier);
+  if (unloadOnly) {
+    if (existing) {
+      const info = await existing.getModelInfo();
+      if (info.path !== modelKey && info.modelKey !== modelKey) throw new Error('The editor identifier belongs to a different model; nothing unloaded.');
+      await existing.unload();
+    }
+    if ((await client.llm.listLoaded()).some(m => m.identifier === config.identifier)) throw new Error('The editor is still loaded.');
+    console.log('Local prompt editor is unloaded.');
+    return;
+  }
+  if (!editorEnabled()) throw new Error('Local prompt editor was stopped in Supa Dev.');
   if (existing) {
     const info = await existing.getModelInfo();
+    if (info.path !== modelKey && info.modelKey !== modelKey) throw new Error('The editor identifier belongs to a different model; nothing unloaded.');
     const actual = await existing.getLoadConfig();
-    if ((info.path === modelKey || info.modelKey === modelKey) && compatible(actual)) {
+    if ((info.path === modelKey || info.modelKey === modelKey) && compatible(actual) && info.ttlMs === idleTtlSeconds * 1000) {
       const memory = gpu();
       const existingRatio = actual.gpu?.ratio === 'max' ? 1 : Number(actual.gpu?.ratio);
       const canUpgrade = gpuAvailable && automaticGpu && existingRatio < 1 && memory.freeMiB >
@@ -101,19 +120,20 @@ async function main() {
   const abort = new AbortController();
   const timer = setInterval(() => {
     try {
+      if (!editorEnabled()) abort.abort('Local prompt editor was stopped in Supa Dev.');
       if (gpu().freeMiB < config.vramReserveMiB) abort.abort('VRAM reserve exhausted during load.');
     } catch (error) { abort.abort(error); }
   }, 1000);
   let model;
   try {
-    model = await client.llm.load(modelKey, { identifier: config.identifier, deviceIdentifier: null, config: desired, signal: abort.signal, verbose: false });
+    model = await client.llm.load(modelKey, { identifier: config.identifier, deviceIdentifier: null, config: desired, ttl: idleTtlSeconds, signal: abort.signal, verbose: false });
   } catch (error) {
     writeReport({ ...report, status: 'load-failed', error: inspect(error, { depth: 8 }), after: gpu() });
     throw error;
   } finally { clearInterval(timer); }
   const actual = await model.getLoadConfig();
   const after = gpu();
-  if (!compatible(actual) || after.freeMiB < config.vramReserveMiB) {
+  if (!editorEnabled() || !compatible(actual) || after.freeMiB < config.vramReserveMiB) {
     await model.unload();
     writeReport({ ...report, status: 'rejected-after-load', actual, after });
     throw new Error('Actual load configuration or free VRAM did not pass verification. Model unloaded.');

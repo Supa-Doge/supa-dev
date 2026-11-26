@@ -213,11 +213,20 @@ def cloud_credential(config):
     return runtime.qwen_key()
 
 
-def prepare_local(context):
+def local_launcher():
     spec = importlib.util.spec_from_file_location('qwen_gateway_launcher', ROOT / 'scripts/qwen-work.py')
     launcher = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(launcher)
+    return launcher
+
+
+def prepare_local(context):
+    launcher = local_launcher()
     launcher.ensure_model(launcher.programs(), launcher.environment('local'), context)
+
+
+def release_local():
+    local_launcher().release_model()
 
 
 def free_vram():
@@ -234,11 +243,14 @@ def free_vram():
 class Gateway:
     def __init__(self, config, state_dir, projects, event_log, control_key,
                  credential_provider=cloud_credential, local_preparer=prepare_local,
-                 gpu_provider=free_vram, allow_test_upstream=False):
+                 gpu_provider=free_vram, allow_test_upstream=False,
+                 local_releaser=None, editor_enabled=lambda: True):
         self.config = config
         self.state_dir, self.projects, self.event_log = Path(state_dir), Path(projects).resolve(), Path(event_log)
         self.control_key = control_key
         self.credential_provider, self.local_preparer, self.gpu_provider = credential_provider, local_preparer, gpu_provider
+        self.local_releaser, self.editor_enabled = local_releaser, editor_enabled
+        self.local_attempted = False
         self.lock = threading.RLock()
         self.state_file = self.state_dir / 'sessions.json'
         self.state = read_json(self.state_file) if self.state_file.exists() else {'version': 1, 'sessions': {}}
@@ -350,6 +362,8 @@ class Gateway:
         self.event('prompt_repair_started', requestId=request_id, sessionId=session['id'], attempt=attempt,
                    scope='conversation_text' if content_error else 'user_text', textFields=len(fields))
         result, changed, batches = copy.deepcopy(original), False, 0
+        # A previous repair has released its model (or it has expired via TTL).
+        self.local_prepared = self.local_attempted = False
         try:
             # Scan every eligible field, in bounded chunks. Nothing is silently
             # skipped because history or a single tool result exceeds local context.
@@ -406,6 +420,15 @@ class Gateway:
             raise
         except Exception as error:
             raise PromptRepairError('Local prompt editing failed validation; no task was executed locally.') from error
+        finally:
+            if self.local_attempted and self.local_releaser is not None:
+                try:
+                    self.local_releaser()
+                    self.event('local_editor_unloaded', requestId=request_id)
+                except Exception as error:
+                    # Do not discard a valid repair because cleanup failed. Idle TTL is the backup.
+                    self.event('local_editor_unload_failed', requestId=request_id, errorType=type(error).__name__)
+            self.local_prepared = False
 
     def edit_batch(self, entries, cloud_error, context, session, request_id, attempt, batch, split_depth=0):
         try:
@@ -601,6 +624,9 @@ class Gateway:
             raise
 
     def check_local(self):
+        if not self.editor_enabled():
+            raise PromptRepairError('Local prompt editor was stopped in Supa Dev. Cloud requests remain available.')
+        self.local_attempted = True
         if not self.local_prepared or self.gpu_provider() < self.config['vramReserveMiB']:
             self.local_preparer(self.config['contextLength'])
             self.local_prepared = True
@@ -811,7 +837,8 @@ def main():
     options = parser.parse_args()
     config = read_json(options.config)
     key = (ROOT / 'config/gateway-control.key').read_text('ascii').strip()
-    gateway = Gateway(config, ROOT / '.qwen/gateway/state', ROOT / 'projects', ROOT / 'output/gateway-events.jsonl', key)
+    gateway = Gateway(config, ROOT / '.qwen/gateway/state', ROOT / 'projects', ROOT / 'output/gateway-events.jsonl', key,
+                      local_releaser=release_local, editor_enabled=runtime.editor_enabled)
     server = make_server(gateway, config['host'], config['port'])
     gateway.event('started', port=config['port'], cloudModel=config['cloudModel'], localModel=config['localModel'])
     server.serve_forever()

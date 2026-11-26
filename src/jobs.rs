@@ -26,6 +26,8 @@ pub enum Action {
     Install,
     Inspect,
     Configure,
+    StopLocal,
+    ResumeLocal,
     Launch(String),
     CheckUpdate,
 }
@@ -49,6 +51,8 @@ pub fn start(
                 Action::Install => ("install", None),
                 Action::Inspect => ("status", None),
                 Action::Configure => ("configure", None),
+                Action::StopLocal => ("stop-local", None),
+                Action::ResumeLocal => ("resume-local", None),
                 Action::Launch(folder) => ("launch", Some(folder)),
                 _ => unreachable!(),
             };

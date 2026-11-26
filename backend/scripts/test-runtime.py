@@ -5,6 +5,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import importlib.util
 import io
 import json
+import subprocess
 from pathlib import Path
 import tempfile
 import threading
@@ -72,10 +73,53 @@ class RuntimeTests(unittest.TestCase):
         with patch.object(runtime,'qwen_key',return_value='synthetic'), patch.object(manager,'installed',return_value=True), patch.object(manager,'module',side_effect=[fake_launcher,fake_downloader]), patch.object(manager,'status'), patch.object(manager,'emit'), patch.object(runtime,'run',side_effect=AssertionError('Unexpected shell command')):
             manager.install()
         fake_launcher.ensure_gateway.assert_called_once()
+        fake_launcher.ensure_server.assert_not_called()
+        fake_launcher.ensure_model.assert_not_called()
         fake_downloader.download.assert_called_once()
         for path in profiles: self.assertEqual(path.read_text('utf-8'),'user profile')
         self.assertFalse((user/'.local/bin/qwen-work').exists())
         self.assertFalse((runtime.HOME/'alias-installed.json').exists())
+
+    def test_stopping_editor_persists_pause_even_when_unload_fails(self):
+        fake_launcher = Mock()
+        fake_launcher.release_model.side_effect = RuntimeError('unload timeout')
+        with patch.object(manager, 'module', return_value=fake_launcher), patch.object(manager, 'status'), patch.object(manager, 'emit'):
+            with self.assertRaisesRegex(RuntimeError, 'unload timeout'):
+                manager.stop_local()
+            self.assertFalse(runtime.editor_enabled())
+            manager.resume_local()
+            self.assertTrue(runtime.editor_enabled())
+            fake_launcher.ensure_model.assert_not_called()
+            fake_launcher.ensure_server.assert_not_called()
+
+    def test_paused_editor_cannot_restart_runtime(self):
+        runtime.save(runtime.HOME/'local-editor.json', {'enabled': False})
+        with patch.object(launcher, 'ensure_server', side_effect=AssertionError('must not start')):
+            with self.assertRaisesRegex(RuntimeError, 'остановлен'):
+                launcher.ensure_model()
+
+    def test_release_never_starts_stopped_daemon_and_targets_only_editor(self):
+        status = Mock(returncode=0, stdout='{"status":"not-running"}', stderr='')
+        with patch.object(runtime, 'lm_program', return_value='lms'), patch.object(runtime, 'qwen_programs', return_value=('node','cli')), patch.object(runtime, 'run', return_value=status) as run:
+            launcher.release_model()
+            self.assertEqual(run.call_count, 1)
+            self.assertEqual(run.call_args.args[0], ['lms','daemon','status','--json'])
+            run.reset_mock()
+            status.stdout = '{"status":"running"}'
+            launcher.release_model()
+            self.assertEqual(run.call_count, 2)
+            self.assertEqual(run.call_args.args[0][-1], '--unload')
+            self.assertEqual(run.call_args.kwargs['timeout'], 15)
+            run.side_effect = [status, subprocess.TimeoutExpired('synthetic unload', 15)]
+            with self.assertRaisesRegex(RuntimeError, 'не завершил выгрузку'):
+                launcher.release_model()
+
+    def test_unresponsive_status_does_not_report_success_or_start_daemon(self):
+        result = Mock(returncode=1, stdout='not json', stderr='failed')
+        with patch.object(runtime, 'lm_program', return_value='lms'), patch.object(runtime, 'run', return_value=result) as run:
+            with self.assertRaisesRegex(RuntimeError, 'не подтверждена'):
+                launcher.release_model()
+            self.assertEqual(run.call_count, 1)
 
     def test_public_installer_accepts_product_user_agent_and_preserves_error_details(self):
         script=b'#!/bin/sh\nexit 0\n'
